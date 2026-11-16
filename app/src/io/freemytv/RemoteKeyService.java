@@ -2,7 +2,6 @@ package io.freemytv;
 
 import android.accessibilityservice.AccessibilityService;
 import android.content.Intent;
-import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.os.SystemClock;
 import android.view.KeyEvent;
@@ -17,7 +16,8 @@ import android.view.accessibility.AccessibilityEvent;
  */
 public class RemoteKeyService extends AccessibilityService {
     private static final long COOLDOWN_MS = 1500;
-    private String stockHome;       // the package of the TV's own home screen, once found
+    private java.util.Set<String> homes;   // packages of every home app (read when the service starts)
+    private int toasts;
     private long lastRedirect;
 
     @Override protected boolean onKeyEvent(KeyEvent event) {
@@ -28,11 +28,11 @@ public class RemoteKeyService extends AccessibilityService {
         if (event == null || event.getEventType() != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return;
         CharSequence pkg = event.getPackageName();
         if (pkg == null) return;
-        String home = stockHome();
-        if (home == null || !home.contentEquals(pkg)) return;
+        if (!isStockHome(pkg.toString())) return;
         long now = SystemClock.uptimeMillis();
         if (now - lastRedirect < COOLDOWN_MS) return;
         lastRedirect = now;
+        if (toasts++ < 3) android.widget.Toast.makeText(this, "Free My TV: home detectada (" + pkg + ")", android.widget.Toast.LENGTH_SHORT).show();
         try {
             startActivity(new Intent(Intent.ACTION_MAIN)
                     .setClassName(getPackageName(), getPackageName() + ".HomeActivity")
@@ -42,31 +42,25 @@ public class RemoteKeyService extends AccessibilityService {
         }
     }
 
-    /** The home app Android would open (not ours): the one to cover. Null when Free My TV already is the home. */
-    private String stockHome() {
-        if (stockHome != null) return stockHome;
-        try {
-            ResolveInfo r = getPackageManager().resolveActivity(
-                    new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME), PackageManager.MATCH_DEFAULT_ONLY);
-            String p = r == null || r.activityInfo == null ? null : r.activityInfo.packageName;
-            if (p != null && !p.equals(getPackageName()) && !p.equals("android")) stockHome = p;
-            if (stockHome == null) {
-                // The chooser answered (no default set): take the other home app with the highest priority.
-                int best = Integer.MIN_VALUE;
+    /** True for the package of a home app that isn't ours (the TV's own home screen). The setup and settings apps are left alone. */
+    private boolean isStockHome(String pkg) {
+        if (pkg.equals(getPackageName()) || pkg.equals("android") || pkg.contains("setup") || pkg.contains("settings")) return false;
+        if (homes == null) {
+            homes = new java.util.HashSet<>();
+            try {
                 for (ResolveInfo i : getPackageManager().queryIntentActivities(
                         new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME), 0)) {
-                    String q = i.activityInfo.packageName;
-                    if (q.equals(getPackageName()) || q.equals("android") || q.contains("setup") || q.contains("settings")) continue;
-                    if (i.priority > best) { best = i.priority; stockHome = q; }
+                    homes.add(i.activityInfo.packageName);
                 }
+            } catch (RuntimeException ignored) {
             }
-        } catch (RuntimeException ignored) {
         }
-        return stockHome;
+        return homes.contains(pkg);
     }
 
     @Override protected void onServiceConnected() {
-        stockHome = null;   // looked up again each time the service starts
+        homes = null;   // looked up again each time the service starts
+        android.widget.Toast.makeText(this, "Free My TV: serviço de acessibilidade ligado", android.widget.Toast.LENGTH_LONG).show();
     }
 
     @Override public void onInterrupt() {}
